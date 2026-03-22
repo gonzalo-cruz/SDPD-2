@@ -1,0 +1,56 @@
+
+[pipeline]
+# Identificador del pipeline
+name = "tripadvisor_complete_etl_pipeline"
+version = "1.0.0"
+description = "Pipeline ETL para procesamiento de datos de restaurantes Tripadvisor"
+
+[data]
+# Rutas de datos
+source_csv = "tripadvisor_european_restaurants_sample.csv"
+output_dir = "outputs/complete_etl"
+temp_dir = "outputs/temp"
+
+# Configuración de dataset
+sample_size = 0.10  # 10% del dataset
+random_state = 42   # Para reproducibilidad
+
+[extraction]
+# Parámetros de extracción
+csv_encoding = "utf-8"
+csv_low_memory = false
+chunk_size = 50000  # Filas a procesar por lote
+
+[transformation]
+# Parámetros de transformación
+
+[transformation.cleaning]
+# Campos críticos requeridos
+required_columns = ["restaurant_link", "restaurant_name", "country", "address"]
+# Umbral de nulos para eliminar columnas (% mayor a este valor)
+null_threshold = 70
+# Valor para imputar categóricas
+categorical_fill_value = "unknown"
+
+[transformation.normalization]
+# Características numéricas a normalizar
+numeric_features = ["avg_rating", "log_reviews_count", "latitude", "longitude"]
+# Rango de normalización
+normalize_range = [0, 1]
+
+[transformation.encoding]
+# One-Hot Encoding con sklearn
+# Formato: "columna" = numero_de_categorias_top
+country_top_n = 10
+price_level_top_n = 5
+meals_top_n = 8
+# Parámetro de OHE
+drop_first = true
+
+[logging]
+# Configuración de logging
+level = "INFO"
+format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+file = "outputs/pipeline.log"
+
+
