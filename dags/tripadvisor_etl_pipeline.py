@@ -12,7 +12,9 @@ import pandas as pd
 import tomllib
 from sklearn.preprocessing import OneHotEncoder
 from airflow.decorators import dag, task
-
+import ast
+import matplotlib.pyplot as plt
+from pandas.api.types import is_float_dtype, is_integer_dtype, is_string_dtype
 
 # CONFIGURACIÓN GLOBAL Y CARGAS
 
@@ -295,6 +297,7 @@ def tripadvisor_complete_etl_pipeline():
         rows_after = len(dataset)
         
         transform_report = {
+            "source_path": str(output_dir),
             "temp_csv": str(temp_csv),
             "rows_before": rows_before,
             "rows_after": rows_after,
@@ -321,9 +324,141 @@ def tripadvisor_complete_etl_pipeline():
         # no se si faltaria hacer algo mas
 
         # --------------------------
+
+
+    logger = logging.getLogger(__name__)
+
+    def parse_string_or_list_column(var_data: pd.Series) -> tuple[pd.Series, bool]:
+        if var_data.empty:
+            return var_data, False
+            
+        sample_val = var_data.iloc[0]
+        
+        if isinstance(sample_val, str) and sample_val.strip().startswith('[') and sample_val.strip().endswith(']'):
+            try:
+                parsed_lists = var_data.apply(ast.literal_eval)
+                return parsed_lists.explode(), True
+            except (ValueError, SyntaxError):
+                return var_data, False
+        return var_data, False
+
+    @task(
+        task_id="eda",
+        doc="EDA: Análisis Exploratorio de Datos con generación de gráficos",
+    )
+    def eda(transform_report: dict) -> dict:
+        source_path = transform_report["source_path"]
+        logger.info(f"Leyendo datos desde: {source_path}")
+        
+        dataset = pd.read_csv(source_path)
+        
+        output_dir = "eda_output_plots"
+        os.makedirs(output_dir, exist_ok=True)
+        
+        float_columns = []
+        integer_columns = []
+        string_columns = []
+        generated_images = []
+
+        for var_name in dataset.columns:
+            var_data = dataset[var_name]
+            
+            if is_float_dtype(var_data):
+                float_columns.append(var_name)
+                
+                plt.figure(figsize=(8, 6))
+                var_data.plot.hist(density=True, bins=30, alpha=0.6, color='skyblue', edgecolor='black')
+                var_data.plot.kde(color='red', linewidth=2)
+                
+                plt.title(f'Distribution and Density: {var_name}')
+                plt.xlabel(var_name)
+                plt.ylabel('Density')
+                plt.grid(axis='y', alpha=0.75)
+                
+                file_path = os.path.join(output_dir, f"hist_{var_name}.png")
+                plt.savefig(file_path, bbox_inches='tight')
+                plt.close()
+                generated_images.append(file_path)
+                
+            elif is_integer_dtype(var_data):
+                integer_columns.append(var_name)
+                
+                plt.figure(figsize=(8, 6))
+                
+                value_counts = var_data.value_counts().sort_index()
+                value_counts.plot.bar(color='mediumseagreen', edgecolor='black')
+                
+                plt.title(f'Category Frequencies: {var_name}')
+                plt.xlabel('Categories')
+                plt.ylabel('Count')
+                
+                file_path = os.path.join(output_dir, f"bar_{var_name}.png")
+                plt.savefig(file_path, bbox_inches='tight')
+                plt.close()
+                generated_images.append(file_path)
+                
+            elif is_string_dtype(var_data):
+                string_columns.append(var_name)
+                
+                words_series, is_list_col = parse_string_or_list_column(var_data)
+                
+                words_series = words_series.astype(str).str.strip()
+                top_words = words_series.value_counts().head(10)
+                
+                if top_words.empty:
+                    continue
+
+                plt.figure(figsize=(10, 8))
+                
+                top_words.sort_values().plot.barh(color='coral', edgecolor='black')
+                
+                title_type = "List Items" if is_list_col else "Words/Categories"
+                plt.title(f'Top Frequencies (Max 10) {title_type}: {var_name}')
+                plt.xlabel('Frequency')
+                plt.ylabel('Item')
+                plt.grid(axis='x', linestyle='--', alpha=0.7)
+                
+                file_path = os.path.join(output_dir, f"text_bar_{var_name}.png")
+                plt.savefig(file_path, bbox_inches='tight')
+                plt.close()
+                generated_images.append(file_path)
+
+        if float_columns:
+            logger.info(f"Generando gráfico de violín para: {float_columns}")
+            plt.figure(figsize=(10, 6))
+            
+            data_to_plot = [dataset[col].values for col in float_columns]
+            
+            plt.violinplot(data_to_plot, showmeans=True, showmedians=True)
+            
+            plt.xticks(ticks=range(1, len(float_columns) + 1), labels=float_columns, rotation=45)
+            plt.title('Combined Violin Plot for Normalized Continuous Variables')
+            plt.ylabel('Value')
+            plt.grid(axis='y', linestyle='--', alpha=0.7)
+            
+            file_path = os.path.join(output_dir, "violin_continuous_vars.png")
+            plt.savefig(file_path, bbox_inches='tight')
+            plt.close()
+            generated_images.append(file_path)
+
+        eda_report = {
+            "source_path": source_path,
+            "plots_dir": output_dir,
+            "continuous_vars_processed": float_columns,
+            "categorical_vars_processed": integer_columns,
+            "string_vars_processed": string_columns,
+            "total_plots_generated": len(generated_images),
+            "generated_images_list": generated_images,
+            "timestamp_eda": datetime.utcnow().isoformat(),
+        }
+        
+        logger.info(f"EDA completado: {len(generated_images)} gráficos generados. Continuas: {len(float_columns)}, Categóricas: {len(integer_columns)}, Strings: {len(string_columns)}")
+        
+        return eda_report
     
     extraction = extract_and_validate()
     transformation = transform_and_clean_data(extraction)
+    eda = eda(transformation)
 
 
 tripadvisor_etl_dag = tripadvisor_complete_etl_pipeline()
